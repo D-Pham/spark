@@ -23,6 +23,7 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.{Partition, TaskContext}
 import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.execution.streaming.StreamExecution
 import org.apache.spark.sql.execution.streaming.continuous.EpochTracker
 import org.apache.spark.sql.internal.SessionState
 import org.apache.spark.sql.types.StructType
@@ -44,10 +45,11 @@ class StateStoreRDD[T: ClassTag, U: ClassTag](
     valueSchema: StructType,
     indexOrdinal: Option[Int],
     sessionState: SessionState,
-    @transient private val storeCoordinator: Option[StateStoreCoordinatorRef])
+    @transient private val storeCoordinator: Option[StateStoreCoordinatorRef],
+    extraOptions: Map[String, String] = Map.empty)
   extends RDD[U](dataRDD) {
 
-  private val storeConf = new StateStoreConf(sessionState.conf)
+  private val storeConf = new StateStoreConf(sessionState.conf, extraOptions)
 
   // A Hadoop Configuration can be about 10 KB, which is pretty big, so broadcast it
   private val hadoopConfBroadcast = dataRDD.context.broadcast(
@@ -72,15 +74,8 @@ class StateStoreRDD[T: ClassTag, U: ClassTag](
       StateStoreId(checkpointLocation, operatorId, partition.index),
       queryRunId)
 
-    // If we're in continuous processing mode, we should get the store version for the current
-    // epoch rather than the one at planning time.
-    val currentVersion = EpochTracker.getCurrentEpoch match {
-      case None => storeVersion
-      case Some(value) => value
-    }
-
     store = StateStore.get(
-      storeProviderId, keySchema, valueSchema, indexOrdinal, currentVersion,
+      storeProviderId, keySchema, valueSchema, indexOrdinal, storeVersion,
       storeConf, hadoopConfBroadcast.value.value)
     val inputIter = dataRDD.iterator(partition, ctxt)
     storeUpdateFunction(store, inputIter)
